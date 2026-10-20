@@ -123,7 +123,6 @@
                 <div class="flex items-center gap-2 bg-slate-950/60 border border-slate-800 px-3 py-1 rounded-xl">
                     <span class="text-[11px] text-slate-400 font-medium mr-1"><i class="fa-solid fa-users text-indigo-400 mr-1"></i>Status (Max 3):</span>
                     <div id="activeUsersList" class="flex items-center gap-2 text-xs">
-                        <!-- Populated dynamically with active user badges -->
                         <span class="text-slate-500 text-[11px]">Ładowanie statusu...</span>
                     </div>
                 </div>
@@ -131,7 +130,6 @@
 
             <!-- Messages Stream -->
             <div id="messagesContainer" class="flex-1 overflow-y-auto p-4 space-y-4 flex flex-col">
-                <!-- Loader placeholder -->
                 <div id="chatLoader" class="my-auto text-center text-slate-500 space-y-2">
                     <i class="fa-solid fa-circle-notch fa-spin text-2xl text-indigo-500"></i>
                     <p class="text-xs">Łączenie z czatem...</p>
@@ -344,18 +342,27 @@
 
         // Global Firebase state & configs
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'live-chat-workspace-app';
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            apiKey: "demo-api-key",
-            authDomain: "demo-app.firebaseapp.com",
-            projectId: "demo-app",
-            storageBucket: "demo-app.appspot.com",
-            messagingSenderId: "123456789",
-            appId: "1:123456789:web:123456"
-        };
+        
+        // Fallback demo config if environment configuration is not present
+        const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config 
+            ? JSON.parse(__firebase_config) 
+            : {
+                apiKey: "AIzaSyDemoKeyForTestingPurposeOnly12345",
+                authDomain: "demo-workspace.firebaseapp.com",
+                projectId: "demo-workspace",
+                storageBucket: "demo-workspace.appspot.com",
+                messagingSenderId: "1234567890",
+                appId: "1:1234567890:web:abcdef123456"
+            };
 
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
+        let app, auth, db;
+        try {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+        } catch (e) {
+            console.error("Firebase init error:", e);
+        }
 
         let currentUser = null;
         let myNick = "";
@@ -365,9 +372,9 @@
         let uploadedJpgBase64 = "";
 
         // Firestore paths using artifact rules
-        const MESSAGES_COLL = collection(db, 'artifacts', appId, 'public', 'data', 'messages');
-        const FILES_COLL = collection(db, 'artifacts', appId, 'public', 'data', 'workspace_files');
-        const PRESENCE_COLL = collection(db, 'artifacts', appId, 'public', 'data', 'user_presence');
+        const MESSAGES_COLL = db ? collection(db, 'artifacts', appId, 'public', 'data', 'messages') : null;
+        const FILES_COLL = db ? collection(db, 'artifacts', appId, 'public', 'data', 'workspace_files') : null;
+        const PRESENCE_COLL = db ? collection(db, 'artifacts', appId, 'public', 'data', 'user_presence') : null;
 
         // Expose functions globally for HTML event handlers
         window.handleNickSubmit = handleNickSubmit;
@@ -386,17 +393,33 @@
         window.switchMobileTab = switchMobileTab;
         window.insertEmoji = insertEmoji;
 
-        // Initialize Authentication
+        // Initialize Authentication safely
         async function initAuth() {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+            if (!auth) {
+                showToast("Błąd inicjalizacji Firebase", "error");
+                return;
+            }
+
+            let authenticated = false;
+
+            // Try custom token if available
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                try {
                     await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
+                    authenticated = true;
+                } catch (customTokenErr) {
+                    console.warn("Custom token sign-in failed, trying anonymous auth...", customTokenErr);
                 }
-            } catch (err) {
-                console.error("Błąd uwierzytelniania Firebase:", err);
-                showToast("Błąd połączenia z bazą danych", "error");
+            }
+
+            // Fallback to anonymous sign-in
+            if (!authenticated) {
+                try {
+                    await signInAnonymously(auth);
+                } catch (anonErr) {
+                    console.error("Błąd uwierzytelniania Firebase (Anonim):", anonErr);
+                    showToast("Problem z połączeniem z bazą danych", "error");
+                }
             }
         }
 
@@ -411,7 +434,7 @@
 
         // --- PRESENCE & MANDATORY NICKNAME LOGIC ---
         function subscribeToPresence() {
-            if (!currentUser) return;
+            if (!currentUser || !PRESENCE_COLL) return;
 
             onSnapshot(PRESENCE_COLL, (snapshot) => {
                 activeUsersMap = {};
@@ -512,6 +535,8 @@
 
             onSnapshot(MESSAGES_COLL, (snapshot) => {
                 const messagesContainer = document.getElementById('messagesContainer');
+                if (!messagesContainer) return;
+
                 const chatLoader = document.getElementById('chatLoader');
                 if (chatLoader) chatLoader.remove();
 
@@ -527,7 +552,8 @@
                     return timeA - timeB;
                 });
 
-                document.getElementById('chatCountBadge').textContent = `${docs.length} wiadomości`;
+                const countBadge = document.getElementById('chatCountBadge');
+                if (countBadge) countBadge.textContent = `${docs.length} wiadomości`;
 
                 messagesContainer.innerHTML = '';
 
@@ -564,7 +590,6 @@
                     messagesContainer.appendChild(msgEl);
                 });
 
-                // Auto scroll to bottom
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
             }, (error) => {
                 console.error("Błąd subskrypcji czatu:", error);
@@ -615,6 +640,8 @@
 
             onSnapshot(FILES_COLL, (snapshot) => {
                 const fileListContainer = document.getElementById('fileListContainer');
+                if (!fileListContainer) return;
+
                 const filesLoader = document.getElementById('filesLoader');
                 if (filesLoader) filesLoader.remove();
 
@@ -652,7 +679,6 @@
                     card.className = "glass-panel rounded-2xl p-3 border border-slate-800/80 hover:border-indigo-500/40 transition group flex flex-col gap-3";
 
                     card.innerHTML = `
-                        <!-- File Card Top: Image Preview & Details -->
                         <div class="flex gap-3">
                             <div class="w-24 h-20 rounded-xl bg-slate-950 overflow-hidden relative shrink-0 border border-slate-800">
                                 <img src="${previewImgSrc}" onerror="this.src='${defaultImg}'" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" alt="JPG Preview">
@@ -674,7 +700,6 @@
                             </div>
                         </div>
 
-                        <!-- Card Action Buttons -->
                         <div class="flex items-center justify-between pt-2 border-t border-slate-800/60 text-xs gap-1">
                             <button onclick="openPreviewModal('${file.id}')" 
                                     class="flex-1 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 py-1.5 px-2 rounded-lg font-medium flex items-center justify-center gap-1.5 border border-indigo-500/30 transition">
@@ -693,7 +718,6 @@
                         </div>
                     `;
 
-                    // Store raw content in data attribute store on window for viewing/downloading
                     window[`file_data_${file.id}`] = file;
 
                     fileListContainer.appendChild(card);
